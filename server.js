@@ -128,7 +128,6 @@ app.post('/api/chat', async (req, res) => {
         try {
             const listResult = await fileManager.listFiles();
             if (listResult.files) {
-                // Filtra APENAS OS QUE ESTÃO PRONTOS (Evita que o chat trave)
                 const activeFiles = listResult.files.filter(f => f.state === 'ACTIVE');
                 activeFiles.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
                 allGeminiFiles = activeFiles.slice(0, 30).map(f => ({ uri: f.uri, mimeType: f.mimeType }));
@@ -136,7 +135,8 @@ app.post('/api/chat', async (req, res) => {
         } catch(e) { }
 
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const systemPrompt = `Você é o RACKS IA. Responda com base nos arquivos anexados e no contexto rápido: ${contextText || "Sem contexto extra."}`;
+        const systemPrompt = `Você é o RACKS IA. Responda com base nos arquivos anexados e no contexto rápido: ${contextText || "Sem contexto extra."}
+IMPORTANTE: Você recebeu vários documentos anexos. A resposta para a pergunta do usuário PODE ESTAR BEM NO INÍCIO (primeiro parágrafo) ou no meio de um deles. Você DEVE pesquisar e ler minuciosamente TODOS os arquivos anexos antes de dizer que não encontrou a informação. A informação geralmente está lá, você só precisa focar e procurar com mais atenção.`;
 
         const chatParts = [{ text: systemPrompt }, { text: `PERGUNTA: ${query}` }];
         allGeminiFiles.forEach(file => { if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } }); });
@@ -153,7 +153,7 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// 3. O RADAR DA NUVEM (AGORA DEVOLVE A LISTA DETALHADA COM O STATUS DE CADA UM)
+// 3. O RADAR DA NUVEM
 app.get('/api/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -189,12 +189,55 @@ app.get('/api/status', async (req, res) => {
                 pageToken = listResult.nextPageToken;
             } while (pageToken);
             
-            // Ordena para que os mais recentes apareçam no topo da lista
             filesList.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
         } catch(e) { console.error("Erro no Radar Google:", e.message); }
 
         res.json({ active, processing, total, files: filesList });
     } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
+// 3.5. NOVA ROTA: AUDITORIA DE DOCUMENTO (ANALISAR ARQUIVO INDIVIDUAL)
+app.post('/api/analyze-file', async (req, res) => {
+    try {
+        const { uri, mimeType } = req.body;
+        if (!uri) throw new Error("URI não fornecido.");
+
+        const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+        const prompt = `Atue como um analista de extração de dados. O documento em anexo precisa ser lido e compreendido.
+Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem formatação markdown:
+{
+  "summary": "Um resumo claro de 2 a 3 frases sobre o conteúdo principal do documento",
+  "score": <um número inteiro de 0 a 100 avaliando o quão fácil, legível e bem estruturado é o texto para você ler e extrair informações>,
+  "readability": "Uma frase curta diagnosticando a qualidade do ficheiro (ex: 'O texto é perfeitamente legível e estruturado nativamente' ou 'O documento parece um scan/imagem que dificulta a leitura precisa de tabelas ou textos')"
+}`;
+
+        const result = await model.generateContent([
+            { fileData: { mimeType: mimeType, fileUri: uri } },
+            { text: prompt }
+        ]);
+
+        let textResponse = result.response.text();
+        
+        // Tenta limpar o markdown se a IA formatar o texto com ```json ... ```
+        textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+        
+        let analysis;
+        try {
+            analysis = JSON.parse(textResponse);
+        } catch (e) {
+            // Fallback seguro caso a IA não retorne o formato perfeito
+            analysis = {
+                summary: textResponse.substring(0, 150) + "...",
+                score: 50,
+                readability: "O arquivo foi lido, mas a formatação gerou conflito na extração de pontuação exata."
+            };
+        }
+
+        res.json(analysis);
+    } catch (error) {
+        console.error("Erro na auditoria do arquivo:", error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 // 4. APAGAR 1 FICHEIRO
@@ -213,9 +256,15 @@ app.post('/api/delete-file', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 5. BOTÃO NUCLEAR
-app.delete('/api/clear-cloud', async (req, res) => {
-    try {
+// 5. BOTÃO NUCLEAR EM SEGUNDO PLANO (A SOLUÇÃO PARA O SEU PROBLEMA!)
+app.delete('/api/clear-cloud', (req, res) => {
+    console.log("☢️ Ordem de Limpeza recebida. A enviar resposta ao cliente...");
+    
+    // Responde ao cliente imediatamente para ele não receber a "Falha de Conexão"
+    res.json({ success: true, message: "A limpeza começou em segundo plano." });
+
+    // Executa a destruição da base de dados em background (pode demorar o tempo que quiser!)
+    (async () => {
         let count = 0;
         let pageToken;
         do {
@@ -235,8 +284,8 @@ app.delete('/api/clear-cloud', async (req, res) => {
 
         try { if(pineconeIndex) await pineconeIndex.deleteAll(); } catch(e) {}
         
-        res.json({ success: true, count });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+        console.log(`✅ Limpeza Total concluída nos bastidores. ${count} destruídos.`);
+    })();
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM INVENTÁRIO DETALHADO PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM INVENTÁRIO DETALHADO E LIMPEZA EM BACKGROUND PRONTO NA PORTA ${port}`));
