@@ -192,9 +192,10 @@ ${contextText || "Sem contexto rápido."}`;
     }
 });
 
-// Arranca a sincronização e liga o servidor
-syncGlobalDocuments().then(() => {
-    app.listen(port, () => {
-        console.log(`🚀 SERVIDOR RACKS IA PRONTO NA PORTA ${port}`);
-    });
+// Arranca o servidor IMEDIATAMENTE e faz a sincronização em segundo plano
+app.listen(port, () => {
+    console.log(`🚀 SERVIDOR RACKS IA PRONTO NA PORTA ${port}`);
+    
+    // Inicia a leitura dos PDFs sem bloquear o arranque do Render
+    syncGlobalDocuments().catch(err => console.error("Falha na sincronização global:", err));
 });

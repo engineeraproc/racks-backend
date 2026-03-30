@@ -1,26 +1,18 @@
 {
   "name": "racks-backend",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Servidor Cérebro RACKS IA",
+  "main": "server.js",
   "scripts": {
-    "dev": "nodemon server.js"
+    "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
-    "@google/generative-ai": "^0.24.1",
-    "@pinecone-database/pinecone": "^7.1.0",
-    "cors": "^2.8.6",
-    "dotenv": "^17.3.1",
-    "express": "^5.2.1",
-    "multer": "^2.1.1",
-    "pdf-parse": "^2.4.5",
-    "xlsx": "^0.18.5"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.14"
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.0.3",
+    "multer": "^1.4.5-lts.1",
+    "xlsx": "^0.18.5",
+    "@google/generative-ai": "^0.21.0",
+    "@pinecone-database/pinecone": "^2.1.0"
   }
 }
