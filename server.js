@@ -149,11 +149,11 @@ app.post('/api/chat', async (req, res) => {
             chatParts.push({ text: `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n\n---\n\n` });
         }
 
-        // 3º - Instruções do Sistema e Contexto Rápido
-        chatParts.push({ text: `INSTRUÇÕES DO SISTEMA: Você é o RACKS IA, um assistente técnico de engenharia. Os documentos oficiais foram fornecidos ACIMA. Use-os com extrema atenção e rigor. A informação solicitada PODE ESTAR NO PRIMEIRO PARÁGRAFO ou oculta no meio dos documentos. Procure minuciosamente antes de dizer que não sabe. Contexto adicional extraído: ${contextText}` });
+        // 3º - Instruções RIGOROSAS do Sistema (Force Deep Search)
+        chatParts.push({ text: `DIRETRIZ DE BUSCA EXAUSTIVA: Você é o RACKS IA, um assistente técnico de engenharia da APROC. Sua ÚNICA fonte de verdade são os arquivos que foram fornecidos acima. Você DEVE realizar uma busca exaustiva (como um Ctrl+F) dentro do texto e tabelas de todos os arquivos anexados antes de responder. A informação solicitada PODE ESTAR NO PRIMEIRO PARÁGRAFO ou oculta no meio dos documentos. Não invente respostas e não diga que não encontrou sem antes procurar o termo literal da pergunta em todas as páginas dos anexos. Contexto adicional do Pinecone: ${contextText}` });
 
-        // 4º - A Pergunta Exata no Final (Para a IA não esquecer o que foi pedido)
-        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE PERGUNTA COM BASE NOS DOCUMENTOS ACIMA:\nPERGUNTA: ${query}` });
+        // 4º - A Pergunta Exata no Final
+        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE PERGUNTA PROCURANDO NOS DOCUMENTOS:\nPERGUNTA: ${query}` });
 
         const resultStream = await model.generateContentStream(chatParts);
         for await (const chunk of resultStream.stream) {
@@ -210,7 +210,7 @@ app.get('/api/status', async (req, res) => {
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. NOVA ROTA: AUDITORIA DE LEITURA DA IA
+// 4. AUDITORIA DE LEITURA DA IA
 app.post('/api/analyze-file', async (req, res) => {
     try {
         const { uri, mimeType } = req.body;
