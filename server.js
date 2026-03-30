@@ -103,7 +103,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 2. ROTA DE CHAT (ESTRATÉGIA AGULHA NO PALHEIRO E MEMÓRIA)
+// 2. ROTA DE CHAT
 app.post('/api/chat', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -138,22 +138,23 @@ app.post('/api/chat', async (req, res) => {
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const chatParts = [];
 
-        // 1º - Entregar a Base de Dados (Os PDFs)
         allGeminiFiles.forEach(file => { 
             if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } }); 
         });
 
-        // 2º - Memória da Conversa (Histórico)
         if (history && history.length > 0) {
             const historyText = history.map(h => `${h.role === 'user' ? 'Usuário' : 'RACKS IA'}: ${h.content}`).join('\n');
             chatParts.push({ text: `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n\n---\n\n` });
         }
 
-        // 3º - Instruções RIGOROSAS do Sistema (Force Deep Search)
-        chatParts.push({ text: `DIRETRIZ DE BUSCA EXAUSTIVA: Você é o RACKS IA, um assistente técnico de engenharia da APROC. Sua ÚNICA fonte de verdade são os arquivos que foram fornecidos acima. Você DEVE realizar uma busca exaustiva (como um Ctrl+F) dentro do texto e tabelas de todos os arquivos anexados antes de responder. A informação solicitada PODE ESTAR NO PRIMEIRO PARÁGRAFO ou oculta no meio dos documentos. Não invente respostas e não diga que não encontrou sem antes procurar o termo literal da pergunta em todas as páginas dos anexos. Contexto adicional do Pinecone: ${contextText}` });
+        chatParts.push({ text: `DIRETRIZ DE BUSCA EXAUSTIVA E CEGA: Você é o RACKS IA, um assistente técnico de engenharia da APROC.
+REGRA 1: Você é PROIBIDO de julgar se um arquivo tem a resposta com base apenas no TÍTULO dele.
+REGRA 2: A informação solicitada (ex: Ciclo de Carnot) pode estar DENTRO de um documento cujo título parece não ter nada a ver (ex: "SIST COMPRESSAO"). 
+REGRA 3: Você DEVE entrar e ler o CONTEÚDO INTERNO, parágrafo por parágrafo, de TODOS os documentos anexados acima antes de responder.
+REGRA 4: Procure minuciosamente a palavra-chave no início (introdução) e no meio dos PDFs.
+Use apenas os arquivos fornecidos. Contexto adicional do Pinecone: ${contextText}` });
 
-        // 4º - A Pergunta Exata no Final
-        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE PERGUNTA PROCURANDO NOS DOCUMENTOS:\nPERGUNTA: ${query}` });
+        chatParts.push({ text: `\n\nAGORA, IGNORANDO OS TÍTULOS E LENDO O CONTEÚDO DOS DOCUMENTOS, RESPONDA À SEGUINTE PERGUNTA:\nPERGUNTA: ${query}` });
 
         const resultStream = await model.generateContentStream(chatParts);
         for await (const chunk of resultStream.stream) {
@@ -162,7 +163,11 @@ app.post('/api/chat', async (req, res) => {
         res.write(`data: [DONE]\n\n`);
         res.end();
     } catch (error) {
-        res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+        let msg = error.message;
+        if (msg.includes('429') || msg.toLowerCase().includes('quota')) {
+            msg = "⚠️ Limite de velocidade da Google atingido. Aguarde 1 minuto e tente de novo.";
+        }
+        res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
         res.end();
     }
 });
@@ -210,7 +215,7 @@ app.get('/api/status', async (req, res) => {
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. AUDITORIA DE LEITURA DA IA
+// 4. AUDITORIA DE LEITURA DA IA COM DETEÇÃO DE LIMITES
 app.post('/api/analyze-file', async (req, res) => {
     try {
         const { uri, mimeType } = req.body;
@@ -242,7 +247,12 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
 
         res.json(analysis);
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        // Deteta se o erro for do bloqueio de velocidade da Google
+        let msg = error.message;
+        if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('overloaded')) {
+            msg = "Limite de velocidade da IA atingido. Aguarde cerca de 1 minuto antes de auditar outro documento.";
+        }
+        res.status(500).json({ error: msg });
     }
 });
 
@@ -288,4 +298,4 @@ app.delete('/api/clear-cloud', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM MEMÓRIA E AUDITORIA PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM DETEÇÃO DE LIMITES PRONTO NA PORTA ${port}`));
