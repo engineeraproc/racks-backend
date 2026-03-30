@@ -23,7 +23,6 @@ const fileManager = new GoogleAIFileManager(process.env.GEMINI_API_KEY);
 const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY });
 const pineconeIndex = pc.index(process.env.PINECONE_INDEX);
 
-// Permite receber os ficheiros enviados pelo seu Painel de Administrador
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
 // ==========================================
@@ -67,18 +66,15 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
         const file = req.file;
         const ext = path.extname(file.originalname).toLowerCase();
         
-        // Guarda temporariamente no Render só para processar e apaga a seguir (Poupa memória)
         const tempFilePath = path.join(os.tmpdir(), `${Date.now()}_${file.originalname}`);
         fs.writeFileSync(tempFilePath, file.buffer);
 
         console.log(`📥 A processar ficheiro: ${file.originalname}`);
 
-        // SE FOR PDF OU EXCEL (Vai para a Google)
         if (ext === '.pdf' || ['.xlsx', '.xls', '.csv'].includes(ext)) {
             let fileToUpload = tempFilePath;
             let mimeType = 'application/pdf';
 
-            // Converte Excel para CSV para a IA ler melhor
             if (['.xlsx', '.xls', '.csv'].includes(ext)) {
                 const workbook = xlsx.readFile(tempFilePath);
                 const csvData = xlsx.utils.sheet_to_csv(workbook.Sheets[workbook.SheetNames[0]]);
@@ -87,7 +83,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
                 mimeType = 'text/csv';
             }
 
-            // Envia para o cérebro da Google
             const uploadResult = await fileManager.uploadFile(fileToUpload, { 
                 mimeType: mimeType, 
                 displayName: file.originalname 
@@ -96,7 +91,6 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
             console.log(`✅ Guardado na Nuvem Google: ${file.originalname}`);
             res.json({ method: 'gemini_file', uri: uploadResult.file.uri, mimeType: mimeType });
         } 
-        // SE FOR TEXTO (Vai para o Pinecone)
         else if (ext === '.txt') {
             const textContent = file.buffer.toString('utf-8');
             const chunks = chunkText(textContent, 1000);
@@ -136,7 +130,6 @@ app.post('/api/chat', async (req, res) => {
         const { query } = req.body;
         console.log(`\n🧠 Pergunta do Utilizador: "${query}"`);
         
-        // 1. Pesquisa Pinecone (Manuais em Texto)
         let queryVectorRaw = await getEmbedding(query);
         let queryVector = [];
         for(let i=0; i<queryVectorRaw.length; i++) queryVector.push(Number(queryVectorRaw[i]));
@@ -145,13 +138,21 @@ app.post('/api/chat', async (req, res) => {
         try { searchResults = await pineconeIndex.query({ vector: queryVector, topK: 3, includeMetadata: true }); } catch (e) {}
         let contextText = searchResults.matches ? searchResults.matches.map(m => `[Documento: ${m.metadata?.source}]\n${m.metadata?.text}`).join('\n\n') : '';
 
-        // 2. O TRUQUE MÁGICO: Vai à Google ver TODOS os PDFs que você já enviou!
         let allGeminiFiles = [];
+        let processingCount = 0;
+        
+        // VAI BUSCAR OS DOCUMENTOS E VERIFICA SE JÁ FORAM LIDOS PELA GOOGLE
         try {
             const listResult = await fileManager.listFiles();
             if (listResult.files) {
-                allGeminiFiles = listResult.files.map(f => ({ uri: f.uri, mimeType: f.mimeType }));
-                console.log(`📎 Encontrados ${allGeminiFiles.length} documentos da APROC na nuvem.`);
+                // Filtra apenas os ficheiros que a IA já terminou de ler (ACTIVE)
+                const activeFiles = listResult.files.filter(f => f.state === 'ACTIVE');
+                processingCount = listResult.files.length - activeFiles.length;
+                
+                // Pega nos 30 mais recentes para não sobrecarregar a memória
+                activeFiles.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
+                allGeminiFiles = activeFiles.slice(0, 30).map(f => ({ uri: f.uri, mimeType: f.mimeType }));
+                console.log(`📎 Foram anexados ${allGeminiFiles.length} documentos à pergunta.`);
             }
         } catch(e) { console.error("Aviso: Erro ao listar ficheiros da Google", e); }
 
@@ -162,14 +163,21 @@ ${contextText || "Sem contexto rápido."}`;
 
         const chatParts = [{ text: systemPrompt }, { text: `PERGUNTA: ${query}` }];
 
-        // Anexa todos os PDFs globais na cabeça da IA
         allGeminiFiles.forEach(file => {
             if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } });
         });
 
         const resultStream = await model.generateContentStream(chatParts);
+        
+        // Se houver ficheiros a processar, avisa o utilizador no chat!
+        if (processingCount > 0) {
+             res.write(`data: ${JSON.stringify({ text: `_Aviso: ${processingCount} documento(s) ainda estão a ser lidos pela IA na nuvem e não entraram nesta resposta. Tente de novo em alguns minutos._\n\n` })}\n\n`);
+        }
+
         for await (const chunk of resultStream.stream) {
-            res.write(`data: ${JSON.stringify({ text: chunk.text() })}\n\n`);
+            try {
+                res.write(`data: ${JSON.stringify({ text: chunk.text() })}\n\n`);
+            } catch(e) {}
         }
         res.write(`data: [DONE]\n\n`);
         res.end();
