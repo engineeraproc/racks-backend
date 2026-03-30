@@ -15,7 +15,11 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.use(cors({ origin: '*' }));
+// FORÇA A AUTORIZAÇÃO DE TODOS OS MÉTODOS (Incluindo o DELETE da Limpeza Total)
+app.use(cors({ 
+    origin: '*',
+    methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']
+}));
 app.use(express.json({ limit: '50mb' }));
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -149,8 +153,15 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// 3. O RADAR DA NUVEM (NOVO)
+// 3. O RADAR DA NUVEM (CORRIGIDO ANTI-CACHE)
 app.get('/api/status', async (req, res) => {
+    // ESTAS 4 LINHAS SÃO O DESTRUIDOR DE CACHE
+    // Obrigam o programa a ir buscar os números reais à internet em vez de usar a memória
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    res.setHeader('Surrogate-Control', 'no-store');
+
     try {
         let processing = 0;
         let active = 0;
@@ -162,7 +173,7 @@ app.get('/api/status', async (req, res) => {
                 active = listResult.files.filter(f => f.state === 'ACTIVE').length;
                 processing = listResult.files.filter(f => f.state === 'PROCESSING').length;
             }
-        } catch(e) {}
+        } catch(e) { console.error("Erro no Radar Google:", e.message); }
         res.json({ active, processing, total });
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
@@ -183,22 +194,48 @@ app.post('/api/delete-file', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 5. BOTÃO NUCLEAR (LIMPEZA TOTAL)
+// 5. BOTÃO NUCLEAR (LIMPEZA TOTAL CORRIGIDA COM PAGINAÇÃO)
 app.delete('/api/clear-cloud', async (req, res) => {
     try {
+        console.log("☢️ A iniciar protocolo de Limpeza Nuclear...");
         let count = 0;
-        try {
-            const listResult = await fileManager.listFiles();
-            if (listResult.files) {
-                for (const file of listResult.files) {
-                    await fileManager.deleteFile(file.name);
-                    count++;
+        let pageToken;
+
+        // Limpa a Google página a página (Impede sobrecargas e erros silenciosos)
+        do {
+            try {
+                const listResult = await fileManager.listFiles({ pageToken });
+                if (listResult.files) {
+                    for (const file of listResult.files) {
+                        try {
+                            await fileManager.deleteFile(file.name);
+                            count++;
+                        } catch(delErr) {
+                            console.error(`Aviso ao apagar ${file.name}:`, delErr.message);
+                        }
+                    }
                 }
+                pageToken = listResult.nextPageToken;
+            } catch(e) {
+                console.error("Erro na leitura da Google API durante a limpeza:", e.message);
+                break; // Se der erro crítico, para a limpeza e avisa
             }
-        } catch(e) {}
-        try { if(pineconeIndex) await pineconeIndex.deleteAll(); } catch(e) {}
+        } while (pageToken);
+
+        // Limpa o Pinecone
+        try { 
+            if(pineconeIndex) {
+                await pineconeIndex.deleteAll(); 
+                console.log("Pinecone limpo com sucesso.");
+            }
+        } catch(e) { console.error("Erro ao limpar Pinecone:", e.message); }
+        
+        console.log(`✅ Limpeza Total concluída. ${count} ficheiros destruídos.`);
         res.json({ success: true, count });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error("Erro fatal na Rota de Limpeza:", error);
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM RADAR PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM RADAR ANTI-CACHE PRONTO NA PORTA ${port}`));
