@@ -103,16 +103,17 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 2. ROTA DE CHAT
+// 2. ROTA DE CHAT (ESTRATÉGIA AGULHA NO PALHEIRO E MEMÓRIA)
 app.post('/api/chat', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
     try {
-        const { query } = req.body;
-        let contextText = '';
+        const { query, history } = req.body;
+        console.log(`\n🧠 Pergunta: "${query}"`);
         
+        let contextText = '';
         if (pineconeIndex) {
             try {
                 let queryVectorRaw = await getEmbedding(query);
@@ -135,11 +136,24 @@ app.post('/api/chat', async (req, res) => {
         } catch(e) { }
 
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-        const systemPrompt = `Você é o RACKS IA. Responda com base nos arquivos anexados e no contexto rápido: ${contextText || "Sem contexto extra."}
-IMPORTANTE: Você recebeu vários documentos anexos. A resposta para a pergunta do usuário PODE ESTAR BEM NO INÍCIO (primeiro parágrafo) ou no meio de um deles. Você DEVE pesquisar e ler minuciosamente TODOS os arquivos anexos antes de dizer que não encontrou a informação. A informação geralmente está lá, você só precisa focar e procurar com mais atenção.`;
+        const chatParts = [];
 
-        const chatParts = [{ text: systemPrompt }, { text: `PERGUNTA: ${query}` }];
-        allGeminiFiles.forEach(file => { if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } }); });
+        // 1º - Entregar a Base de Dados (Os PDFs)
+        allGeminiFiles.forEach(file => { 
+            if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } }); 
+        });
+
+        // 2º - Memória da Conversa (Histórico)
+        if (history && history.length > 0) {
+            const historyText = history.map(h => `${h.role === 'user' ? 'Usuário' : 'RACKS IA'}: ${h.content}`).join('\n');
+            chatParts.push({ text: `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n\n---\n\n` });
+        }
+
+        // 3º - Instruções do Sistema e Contexto Rápido
+        chatParts.push({ text: `INSTRUÇÕES DO SISTEMA: Você é o RACKS IA, um assistente técnico de engenharia. Os documentos oficiais foram fornecidos ACIMA. Use-os com extrema atenção e rigor. A informação solicitada PODE ESTAR NO PRIMEIRO PARÁGRAFO ou oculta no meio dos documentos. Procure minuciosamente antes de dizer que não sabe. Contexto adicional extraído: ${contextText}` });
+
+        // 4º - A Pergunta Exata no Final (Para a IA não esquecer o que foi pedido)
+        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE PERGUNTA COM BASE NOS DOCUMENTOS ACIMA:\nPERGUNTA: ${query}` });
 
         const resultStream = await model.generateContentStream(chatParts);
         for await (const chunk of resultStream.stream) {
@@ -153,7 +167,7 @@ IMPORTANTE: Você recebeu vários documentos anexos. A resposta para a pergunta 
     }
 });
 
-// 3. O RADAR DA NUVEM
+// 3. O RADAR DA NUVEM (INVENTÁRIO)
 app.get('/api/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -196,7 +210,7 @@ app.get('/api/status', async (req, res) => {
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// 3.5. NOVA ROTA: AUDITORIA DE DOCUMENTO (ANALISAR ARQUIVO INDIVIDUAL)
+// 4. NOVA ROTA: AUDITORIA DE LEITURA DA IA
 app.post('/api/analyze-file', async (req, res) => {
     try {
         const { uri, mimeType } = req.body;
@@ -208,7 +222,7 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
 {
   "summary": "Um resumo claro de 2 a 3 frases sobre o conteúdo principal do documento",
   "score": <um número inteiro de 0 a 100 avaliando o quão fácil, legível e bem estruturado é o texto para você ler e extrair informações>,
-  "readability": "Uma frase curta diagnosticando a qualidade do ficheiro (ex: 'O texto é perfeitamente legível e estruturado nativamente' ou 'O documento parece um scan/imagem que dificulta a leitura precisa de tabelas ou textos')"
+  "readability": "Uma frase curta diagnosticando a qualidade do ficheiro (ex: 'O texto é perfeitamente legível e estruturado nativamente' ou 'O documento parece um scan/imagem que dificulta a leitura precisa')"
 }`;
 
         const result = await model.generateContent([
@@ -217,30 +231,22 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
         ]);
 
         let textResponse = result.response.text();
-        
-        // Tenta limpar o markdown se a IA formatar o texto com ```json ... ```
         textResponse = textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
         
         let analysis;
         try {
             analysis = JSON.parse(textResponse);
         } catch (e) {
-            // Fallback seguro caso a IA não retorne o formato perfeito
-            analysis = {
-                summary: textResponse.substring(0, 150) + "...",
-                score: 50,
-                readability: "O arquivo foi lido, mas a formatação gerou conflito na extração de pontuação exata."
-            };
+            analysis = { summary: textResponse.substring(0, 150) + "...", score: 50, readability: "O arquivo foi lido, mas a formatação gerou conflito na extração." };
         }
 
         res.json(analysis);
     } catch (error) {
-        console.error("Erro na auditoria do arquivo:", error);
         res.status(500).json({ error: error.message });
     }
 });
 
-// 4. APAGAR 1 FICHEIRO
+// 5. APAGAR 1 FICHEIRO
 app.post('/api/delete-file', async (req, res) => {
     try {
         const { uri } = req.body;
@@ -256,15 +262,9 @@ app.post('/api/delete-file', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 5. BOTÃO NUCLEAR EM SEGUNDO PLANO (A SOLUÇÃO PARA O SEU PROBLEMA!)
-app.delete('/api/clear-cloud', (req, res) => {
-    console.log("☢️ Ordem de Limpeza recebida. A enviar resposta ao cliente...");
-    
-    // Responde ao cliente imediatamente para ele não receber a "Falha de Conexão"
-    res.json({ success: true, message: "A limpeza começou em segundo plano." });
-
-    // Executa a destruição da base de dados em background (pode demorar o tempo que quiser!)
-    (async () => {
+// 6. BOTÃO NUCLEAR
+app.delete('/api/clear-cloud', async (req, res) => {
+    try {
         let count = 0;
         let pageToken;
         do {
@@ -284,8 +284,8 @@ app.delete('/api/clear-cloud', (req, res) => {
 
         try { if(pineconeIndex) await pineconeIndex.deleteAll(); } catch(e) {}
         
-        console.log(`✅ Limpeza Total concluída nos bastidores. ${count} destruídos.`);
-    })();
+        res.json({ success: true, count });
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM INVENTÁRIO DETALHADO E LIMPEZA EM BACKGROUND PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM MEMÓRIA E AUDITORIA PRONTO NA PORTA ${port}`));
