@@ -15,7 +15,6 @@ dotenv.config();
 const app = express();
 const port = process.env.PORT || 3000;
 
-// FORÇA A AUTORIZAÇÃO DE TODOS OS MÉTODOS (Incluindo o DELETE da Limpeza Total)
 app.use(cors({ 
     origin: '*',
     methods: ['GET', 'POST', 'DELETE', 'PUT', 'PATCH', 'OPTIONS']
@@ -129,6 +128,7 @@ app.post('/api/chat', async (req, res) => {
         try {
             const listResult = await fileManager.listFiles();
             if (listResult.files) {
+                // Filtra APENAS OS QUE ESTÃO PRONTOS (Evita que o chat trave)
                 const activeFiles = listResult.files.filter(f => f.state === 'ACTIVE');
                 activeFiles.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
                 allGeminiFiles = activeFiles.slice(0, 30).map(f => ({ uri: f.uri, mimeType: f.mimeType }));
@@ -153,10 +153,8 @@ app.post('/api/chat', async (req, res) => {
     }
 });
 
-// 3. O RADAR DA NUVEM (CORRIGIDO ANTI-CACHE)
+// 3. O RADAR DA NUVEM (AGORA DEVOLVE A LISTA DETALHADA COM O STATUS DE CADA UM)
 app.get('/api/status', async (req, res) => {
-    // ESTAS 4 LINHAS SÃO O DESTRUIDOR DE CACHE
-    // Obrigam o programa a ir buscar os números reais à internet em vez de usar a memória
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -166,15 +164,36 @@ app.get('/api/status', async (req, res) => {
         let processing = 0;
         let active = 0;
         let total = 0;
+        let filesList = [];
+        let pageToken;
+
         try {
-            const listResult = await fileManager.listFiles();
-            if (listResult.files) {
-                total = listResult.files.length;
-                active = listResult.files.filter(f => f.state === 'ACTIVE').length;
-                processing = listResult.files.filter(f => f.state === 'PROCESSING').length;
-            }
+            do {
+                const listResult = await fileManager.listFiles({ pageToken });
+                if (listResult.files) {
+                    for (const f of listResult.files) {
+                        total++;
+                        if (f.state === 'ACTIVE') active++;
+                        if (f.state === 'PROCESSING') processing++;
+                        
+                        filesList.push({
+                            name: f.name,
+                            displayName: f.displayName,
+                            uri: f.uri,
+                            mimeType: f.mimeType,
+                            state: f.state,
+                            updateTime: f.updateTime
+                        });
+                    }
+                }
+                pageToken = listResult.nextPageToken;
+            } while (pageToken);
+            
+            // Ordena para que os mais recentes apareçam no topo da lista
+            filesList.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
         } catch(e) { console.error("Erro no Radar Google:", e.message); }
-        res.json({ active, processing, total });
+
+        res.json({ active, processing, total, files: filesList });
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -194,14 +213,11 @@ app.post('/api/delete-file', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 5. BOTÃO NUCLEAR (LIMPEZA TOTAL CORRIGIDA COM PAGINAÇÃO)
+// 5. BOTÃO NUCLEAR
 app.delete('/api/clear-cloud', async (req, res) => {
     try {
-        console.log("☢️ A iniciar protocolo de Limpeza Nuclear...");
         let count = 0;
         let pageToken;
-
-        // Limpa a Google página a página (Impede sobrecargas e erros silenciosos)
         do {
             try {
                 const listResult = await fileManager.listFiles({ pageToken });
@@ -210,32 +226,17 @@ app.delete('/api/clear-cloud', async (req, res) => {
                         try {
                             await fileManager.deleteFile(file.name);
                             count++;
-                        } catch(delErr) {
-                            console.error(`Aviso ao apagar ${file.name}:`, delErr.message);
-                        }
+                        } catch(delErr) {}
                     }
                 }
                 pageToken = listResult.nextPageToken;
-            } catch(e) {
-                console.error("Erro na leitura da Google API durante a limpeza:", e.message);
-                break; // Se der erro crítico, para a limpeza e avisa
-            }
+            } catch(e) { break; }
         } while (pageToken);
 
-        // Limpa o Pinecone
-        try { 
-            if(pineconeIndex) {
-                await pineconeIndex.deleteAll(); 
-                console.log("Pinecone limpo com sucesso.");
-            }
-        } catch(e) { console.error("Erro ao limpar Pinecone:", e.message); }
+        try { if(pineconeIndex) await pineconeIndex.deleteAll(); } catch(e) {}
         
-        console.log(`✅ Limpeza Total concluída. ${count} ficheiros destruídos.`);
         res.json({ success: true, count });
-    } catch (error) { 
-        console.error("Erro fatal na Rota de Limpeza:", error);
-        res.status(500).json({ error: error.message }); 
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM RADAR ANTI-CACHE PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM INVENTÁRIO DETALHADO PRONTO NA PORTA ${port}`));
