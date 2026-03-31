@@ -103,7 +103,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 2. ROTA DE CHAT (PERSONALIDADE E DIRETRIZES ATUALIZADAS)
+// 2. ROTA DE CHAT (PERSONALIDADE HUMANA E REGRAS RÍGIDAS)
 app.post('/api/chat', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -111,7 +111,6 @@ app.post('/api/chat', async (req, res) => {
 
     try {
         const { query, history } = req.body;
-        console.log(`\n🧠 Pergunta: "${query}"`);
         
         let contextText = '';
         if (pineconeIndex) {
@@ -122,7 +121,7 @@ app.post('/api/chat', async (req, res) => {
                     let searchResults = await pineconeIndex.query({ vector: queryVector, topK: 3, includeMetadata: true });
                     contextText = searchResults.matches ? searchResults.matches.map(m => `[Contexto extraído]\n${m.metadata?.text}`).join('\n\n') : '';
                 }
-            } catch (e) { console.log("Pinecone ignorado."); }
+            } catch (e) {}
         }
 
         let allGeminiFiles = [];
@@ -138,6 +137,7 @@ app.post('/api/chat', async (req, res) => {
         const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
         const chatParts = [];
 
+        // Injeta os dados silenciosamente
         allGeminiFiles.forEach(file => { 
             if (file.mimeType && file.uri) chatParts.push({ fileData: { mimeType: file.mimeType, fileUri: file.uri } }); 
         });
@@ -147,15 +147,17 @@ app.post('/api/chat', async (req, res) => {
             chatParts.push({ text: `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n\n---\n\n` });
         }
 
+        // AS 5 REGRAS DE OURO DA RACKS IA
         chatParts.push({ text: `DIRETRIZES ABSOLUTAS DE COMPORTAMENTO DA RACKS IA:
-1. IDENTIDADE E SIGILO MÁXIMO: Você é a RACKS IA, a inteligência artificial oficial de engenharia da APROC. Aja como se possuísse todo o conhecimento técnico nativamente na sua mente. É ESTRITAMENTE PROIBIDO mencionar palavras como "arquivos", "documentos", "PDFs", "anexos", "upload" ou "base de dados". NUNCA cite o nome de nenhum arquivo nas suas respostas.
-2. INTERAÇÃO SOCIAL HUMANA: Você DEVE responder de forma natural, amigável e prestativa a saudações ou interações casuais (ex: Oi, Olá, Bom dia, Tudo bem?, Quem é você?). Se o usuário disser "Oi", responda com simpatia sem dizer que falta contexto técnico.
-3. RIGOR TÉCNICO E BUSCA CEGA: Para responder a perguntas técnicas, realize uma busca exaustiva e silenciosa em todo o conhecimento que lhe foi injetado (os arquivos que você recebeu, mas que não deve mencionar). A informação solicitada pode estar no primeiro parágrafo ou oculta no meio de qualquer parte do seu conhecimento. Procure o termo exato.
-4. REGRA DE DESCONHECIMENTO TÉCNICO (MUITO IMPORTANTE): Se a pergunta for técnica e, após procurar profundamente, você não encontrar a resposta exata no seu conhecimento, você NÃO deve pedir desculpas nem dar explicações sobre faltar documentos. Você DEVE responder APENAS E EXATAMENTE com esta frase: "A RACKS IA ainda não tem informações concretas sobre [Insira o Assunto Aqui]."
+1. IDENTIDADE E NATURALIDADE: Você é a RACKS IA, a inteligência artificial corporativa da APROC. Aja com empatia e naturalidade. Você É CAPAZ e DEVE responder normalmente a saudações ou conversas cotidianas (como "Oi", "Tudo bem?", "Bom dia").
+2. SIGILO DA FONTE (PROIBIDO MENCIONAR ARQUIVOS): Todo o seu conhecimento técnico advém da sua própria mente. É ESTRITAMENTE PROIBIDO usar palavras como "base de dados", "arquivos fornecidos", "documentos anexados", "PDFs" ou citar nomes de ficheiros em suas respostas. O usuário não deve saber que você lê arquivos.
+3. BUSCA TÉCNICA CEGA E EXAUSTIVA: Para perguntas técnicas, use o contexto que lhe foi injetado (os dados acima e abaixo). Ignore nomes ou títulos das informações; procure exaustivamente o conteúdo interno parágrafo por parágrafo.
+4. REGRA DO DESCONHECIMENTO ABSOLUTO: Se a pergunta for técnica e a informação NÃO estiver no conhecimento que você possui, NUNCA invente, NÃO peça desculpas, NÃO explique que não tem acesso a documentos. Você DEVE responder APENAS E EXATAMENTE com esta frase (adaptando o assunto): "A Racks IA ainda não tem informações concretas sobre [Assunto da pergunta do usuário]."
+5. SIMPLICIDADE: Entregue respostas diretas, limpas e técnicas quando solicitado.
 
-Conhecimento adicional injetado: ${contextText}` });
+Conhecimento adicional interno: ${contextText}` });
 
-        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE INTERAÇÃO/PERGUNTA DO USUÁRIO:\nUSUÁRIO: ${query}` });
+        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE INTERAÇÃO DO USUÁRIO SEGUINDO RIGOROSAMENTE AS REGRAS ACIMA:\nUSUÁRIO: ${query}` });
 
         const resultStream = await model.generateContentStream(chatParts);
         for await (const chunk of resultStream.stream) {
@@ -164,9 +166,12 @@ Conhecimento adicional injetado: ${contextText}` });
         res.write(`data: [DONE]\n\n`);
         res.end();
     } catch (error) {
+        // MENSAGEM DE ERRO CAMUFLADA (Limites de Quota)
         let msg = error.message;
         if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('overloaded')) {
-            msg = "⚠️ O servidor atingiu o limite de consultas rápidas. Por favor, aguarde 2 minutos e tente novamente.";
+            msg = "O servidor atingiu o limite de consultas temporárias. Por favor, tente novamente em 2 minutos.";
+        } else {
+            msg = "Ocorreu uma instabilidade no servidor. Tente novamente.";
         }
         res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
         res.end();
@@ -216,7 +221,7 @@ app.get('/api/status', async (req, res) => {
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. AUDITORIA DE LEITURA (COM AVISO CORRIGIDO)
+// 4. AUDITORIA DE LEITURA
 app.post('/api/analyze-file', async (req, res) => {
     try {
         const { uri, mimeType } = req.body;
@@ -250,7 +255,7 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
     } catch (error) {
         let msg = error.message;
         if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('overloaded')) {
-            msg = "O servidor atingiu o limite de auditorias. Aguarde 2 minutos antes de auditar outro documento.";
+            msg = "O servidor atingiu o limite. Por favor, tente novamente em 2 minutos.";
         }
         res.status(500).json({ error: msg });
     }
