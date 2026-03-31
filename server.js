@@ -103,7 +103,7 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-// 2. ROTA DE CHAT
+// 2. ROTA DE CHAT (PERSONALIDADE E DIRETRIZES ATUALIZADAS)
 app.post('/api/chat', async (req, res) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -120,7 +120,7 @@ app.post('/api/chat', async (req, res) => {
                 if (queryVectorRaw && queryVectorRaw.length > 0) {
                     let queryVector = queryVectorRaw.map(Number);
                     let searchResults = await pineconeIndex.query({ vector: queryVector, topK: 3, includeMetadata: true });
-                    contextText = searchResults.matches ? searchResults.matches.map(m => `[Doc: ${m.metadata?.source}]\n${m.metadata?.text}`).join('\n\n') : '';
+                    contextText = searchResults.matches ? searchResults.matches.map(m => `[Contexto extraído]\n${m.metadata?.text}`).join('\n\n') : '';
                 }
             } catch (e) { console.log("Pinecone ignorado."); }
         }
@@ -147,14 +147,15 @@ app.post('/api/chat', async (req, res) => {
             chatParts.push({ text: `HISTÓRICO RECENTE DA CONVERSA:\n${historyText}\n\n---\n\n` });
         }
 
-        chatParts.push({ text: `DIRETRIZ DE BUSCA EXAUSTIVA E CEGA: Você é o RACKS IA, um assistente técnico de engenharia da APROC.
-REGRA 1: Você é PROIBIDO de julgar se um arquivo tem a resposta com base apenas no TÍTULO dele.
-REGRA 2: A informação solicitada (ex: Ciclo de Carnot) pode estar DENTRO de um documento cujo título parece não ter nada a ver (ex: "SIST COMPRESSAO"). 
-REGRA 3: Você DEVE entrar e ler o CONTEÚDO INTERNO, parágrafo por parágrafo, de TODOS os documentos anexados acima antes de responder.
-REGRA 4: Procure minuciosamente a palavra-chave no início (introdução) e no meio dos PDFs.
-Use apenas os arquivos fornecidos. Contexto adicional do Pinecone: ${contextText}` });
+        chatParts.push({ text: `DIRETRIZES ABSOLUTAS DE COMPORTAMENTO DA RACKS IA:
+1. IDENTIDADE E SIGILO MÁXIMO: Você é a RACKS IA, a inteligência artificial oficial de engenharia da APROC. Aja como se possuísse todo o conhecimento técnico nativamente na sua mente. É ESTRITAMENTE PROIBIDO mencionar palavras como "arquivos", "documentos", "PDFs", "anexos", "upload" ou "base de dados". NUNCA cite o nome de nenhum arquivo nas suas respostas.
+2. INTERAÇÃO SOCIAL HUMANA: Você DEVE responder de forma natural, amigável e prestativa a saudações ou interações casuais (ex: Oi, Olá, Bom dia, Tudo bem?, Quem é você?). Se o usuário disser "Oi", responda com simpatia sem dizer que falta contexto técnico.
+3. RIGOR TÉCNICO E BUSCA CEGA: Para responder a perguntas técnicas, realize uma busca exaustiva e silenciosa em todo o conhecimento que lhe foi injetado (os arquivos que você recebeu, mas que não deve mencionar). A informação solicitada pode estar no primeiro parágrafo ou oculta no meio de qualquer parte do seu conhecimento. Procure o termo exato.
+4. REGRA DE DESCONHECIMENTO TÉCNICO (MUITO IMPORTANTE): Se a pergunta for técnica e, após procurar profundamente, você não encontrar a resposta exata no seu conhecimento, você NÃO deve pedir desculpas nem dar explicações sobre faltar documentos. Você DEVE responder APENAS E EXATAMENTE com esta frase: "A RACKS IA ainda não tem informações concretas sobre [Insira o Assunto Aqui]."
 
-        chatParts.push({ text: `\n\nAGORA, IGNORANDO OS TÍTULOS E LENDO O CONTEÚDO DOS DOCUMENTOS, RESPONDA À SEGUINTE PERGUNTA:\nPERGUNTA: ${query}` });
+Conhecimento adicional injetado: ${contextText}` });
+
+        chatParts.push({ text: `\n\nAGORA RESPONDA À SEGUINTE INTERAÇÃO/PERGUNTA DO USUÁRIO:\nUSUÁRIO: ${query}` });
 
         const resultStream = await model.generateContentStream(chatParts);
         for await (const chunk of resultStream.stream) {
@@ -164,15 +165,15 @@ Use apenas os arquivos fornecidos. Contexto adicional do Pinecone: ${contextText
         res.end();
     } catch (error) {
         let msg = error.message;
-        if (msg.includes('429') || msg.toLowerCase().includes('quota')) {
-            msg = "⚠️ Limite de velocidade da Google atingido. Aguarde 1 minuto e tente de novo.";
+        if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('overloaded')) {
+            msg = "⚠️ O servidor atingiu o limite de consultas rápidas. Por favor, aguarde 2 minutos e tente novamente.";
         }
         res.write(`data: ${JSON.stringify({ error: msg })}\n\n`);
         res.end();
     }
 });
 
-// 3. O RADAR DA NUVEM (INVENTÁRIO)
+// 3. O RADAR DA NUVEM
 app.get('/api/status', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -209,13 +210,13 @@ app.get('/api/status', async (req, res) => {
             } while (pageToken);
             
             filesList.sort((a, b) => new Date(b.updateTime) - new Date(a.updateTime));
-        } catch(e) { console.error("Erro no Radar Google:", e.message); }
+        } catch(e) {}
 
         res.json({ active, processing, total, files: filesList });
     } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// 4. AUDITORIA DE LEITURA DA IA COM DETEÇÃO DE LIMITES
+// 4. AUDITORIA DE LEITURA (COM AVISO CORRIGIDO)
 app.post('/api/analyze-file', async (req, res) => {
     try {
         const { uri, mimeType } = req.body;
@@ -227,7 +228,7 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
 {
   "summary": "Um resumo claro de 2 a 3 frases sobre o conteúdo principal do documento",
   "score": <um número inteiro de 0 a 100 avaliando o quão fácil, legível e bem estruturado é o texto para você ler e extrair informações>,
-  "readability": "Uma frase curta diagnosticando a qualidade do ficheiro (ex: 'O texto é perfeitamente legível e estruturado nativamente' ou 'O documento parece um scan/imagem que dificulta a leitura precisa')"
+  "readability": "Uma frase curta diagnosticando a qualidade do ficheiro (ex: 'O texto é perfeitamente legível e estruturado nativamente')"
 }`;
 
         const result = await model.generateContent([
@@ -247,10 +248,9 @@ Por favor, retorne APENAS um objeto JSON estrito com o seguinte formato, sem for
 
         res.json(analysis);
     } catch (error) {
-        // Deteta se o erro for do bloqueio de velocidade da Google
         let msg = error.message;
         if (msg.includes('429') || msg.toLowerCase().includes('quota') || msg.toLowerCase().includes('overloaded')) {
-            msg = "Limite de velocidade da IA atingido. Aguarde cerca de 1 minuto antes de auditar outro documento.";
+            msg = "O servidor atingiu o limite de auditorias. Aguarde 2 minutos antes de auditar outro documento.";
         }
         res.status(500).json({ error: msg });
     }
@@ -298,4 +298,4 @@ app.delete('/api/clear-cloud', async (req, res) => {
     } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.listen(port, () => console.log(`🚀 SERVIDOR COM DETEÇÃO DE LIMITES PRONTO NA PORTA ${port}`));
+app.listen(port, () => console.log(`🚀 SERVIDOR COM COMPORTAMENTO HUMANO PRONTO NA PORTA ${port}`));
